@@ -1,4 +1,4 @@
-# 📘 My Finance Buddy — V1 (MVP) Feature Specification
+# My Finance Buddy — V1 (MVP) Feature Specification
 
 **Version:** 1.0  
 **Prepared for:** Design & Engineering Teams  
