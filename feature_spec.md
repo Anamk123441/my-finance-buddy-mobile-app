@@ -228,41 +228,129 @@ My Finance Buddy helps international students stay on top of monthly spending in
 
 ### 5.1 Tech Stack (Recommended)
 
-- Frontend: React Native (iOS + Android)
-- Backend: Node.js + Express
-- Database: Supabase
-- Notifications: Firebase Cloud Messaging / APNs
+- Frontend: React + TypeScript
+- UI styling: Tailwind CSS (good for quick responsive layouts)
+- Database: Browser storage, using:
+    - localStorage for simplest implementation, or
+    - localforage (wraps IndexedDB, more robust)
 - Currency API: Fixer.io, ExchangeRate-API, or a suitable free alternative
 
-### 5.2 Data Model (Simplified)
+### 5.2 Data Model (Optimized for Browser Storage)
 
-- User
-  - user_id
-  - home_currency
-  - monthly_budget
-  - created_at
+**Core Entities:**
 
-- Expense
-  - expense_id
-  - user_id (FK)
-  - amount_usd
-  - amount_home_currency
-  - category
-  - note
-  - timestamp
+- **User** (single instance per browser)
+  - id (UUID)
+  - homeCurrency (string, e.g., "INR", "GBP")
+  - monthlyBudget (number, in USD)
+  - onboardingCompleted (boolean)
+  - createdAt (timestamp)
+  - updatedAt (timestamp)
 
-- Recurring Expense
-  - recurring_id
-  - user_id
-  - name
-  - amount
-  - due_date
-  - frequency ("monthly")
+- **Expense**
+  - id (UUID)
+  - amountUSD (number)
+  - amountHomeCurrency (number, cached at time of entry)
+  - exchangeRateUsed (number, e.g., 83.3, the rate applied to this expense)
+  - exchangeRateDate (string, format "YYYY-MM-DD", which day's rate was used)
+  - category (string: "Food", "Groceries", "Rent", "Transport", "Utilities", "School", "Shopping", "Misc")
+  - tags (string array, optional custom tags)
+  - note (string, optional)
+  - timestamp (when the expense occurred)
+  - month (string, format "YYYY-MM" for fast querying)
+  - createdAt (when logged in app)
+  - updatedAt (timestamp)
+  - deleted (boolean, for soft deletes)
 
-- Exchange Rate
-  - currency_code
-  - rate_to_usd
-  - last_updated
+- **BudgetLimit** (for category-level budgets)
+  - id (UUID)
+  - category (string: "Food", "Rent", etc., or "TOTAL" for monthly overall budget)
+  - limitUSD (number)
+  - month (string, format "YYYY-MM", allows different budgets per month)
+  - createdAt (timestamp)
+  - updatedAt (timestamp)
+
+- **RecurringExpense**
+  - id (UUID)
+  - name (string, e.g., "Rent", "Netflix", "Phone Plan")
+  - amountUSD (number)
+  - dueDay (number, 1-31, day of month expense is due)
+  - frequency (string, "monthly" for V1)
+  - category (string, for dashboard grouping)
+  - active (boolean)
+  - notifiedMonths (string array, tracks which months user was reminded, e.g., ["2025-11", "2025-12"])
+  - createdAt (timestamp)
+  - updatedAt (timestamp)
+
+- **Achievement** (for micro-achievements)
+  - id (UUID)
+  - type (string: "7-day-streak", "under-budget", "first-expense", "consistent-tracker")
+  - earnedAt (timestamp)
+  - month (string, format "YYYY-MM", for monthly reset of streaks)
+  - description (string, friendly message shown to user)
+
+- **ExchangeRate** (cached daily)
+  - id (UUID)
+  - currency (string, e.g., "INR")
+  - rateToUSD (number)
+  - date (string, format "YYYY-MM-DD", one rate per currency per day)
+  - lastUpdated (timestamp)
+
+**Data Model Rationale:**
+- No user_id FK on entities (single-user app, simplifies queries)
+- `month` field on Expense enables fast filtering by month without date parsing
+- `notifiedMonths` on RecurringExpense prevents duplicate reminder notifications
+- `deleted` flag on Expense allows data integrity without losing records
+- `BudgetLimit` supports both overall monthly budget and optional category budgets
+- `Achievement` model enables micro-motivations per month
+- `exchangeRateUsed` and `exchangeRateDate` on Expense preserve conversion audit trail
+
+### 5.3 Currency Conversion Flow
+
+**Overview:** Currency conversion happens at the moment an expense is logged. The exchange rate is cached with the expense to maintain historical accuracy and enable fast queries.
+
+**Conversion Process:**
+
+1. **User Adds Expense**
+   - User enters amount (in USD or home currency)
+   - App retrieves today's exchange rate from `ExchangeRate` table for user's `homeCurrency`
+   - If rate not available locally, fetch from API and cache in `ExchangeRate` table (once per day)
+
+2. **Conversion Logic**
+   - If user enters in USD: `amountHomeCurrency = amountUSD × rateToUSD`
+   - If user enters in home currency: `amountUSD = amountHomeCurrency ÷ rateToUSD`
+   - Round home currency to 2 decimal places for display
+
+3. **Storage**
+   - Store `amountUSD` (canonical, always in USD)
+   - Store `amountHomeCurrency` (cached converted value)
+   - Store `exchangeRateUsed` (the specific rate applied, e.g., 83.3)
+   - Store `exchangeRateDate` (which day's rate was used, "YYYY-MM-DD")
+
+4. **Display to User**
+   - Show both amounts: "$9.50 ≈ ₹790" (using cached values)
+   - Show rate transparency: "Rate: 1 USD = ₹83.3 (Nov 29)"
+
+5. **Dashboard Calculations**
+   - All monthly totals use cached `amountUSD` (never recalculate)
+   - Home currency total = sum of all `amountHomeCurrency` for the month
+   - No need to join with `ExchangeRate` table for dashboard queries (fast)
+
+**Benefits:**
+- ✅ Historical accuracy: each expense locked to the rate at the time it was logged
+- ✅ Transparency: users see exactly which rate was applied
+- ✅ Performance: dashboard queries are O(1), no conversion needed on reads
+- ✅ Audit trail: can see why historical conversions differ if rates changed
+
+**Example:**
+```
+Nov 29: User logs $10 expense when rate is 1 USD = ₹83
+  → Stored as: amountUSD=10, amountHomeCurrency=830, exchangeRateUsed=83, exchangeRateDate=2025-11-29
+
+Dec 1: Rate changes to 1 USD = ₹82 (but Nov expense stays locked)
+  → Historical expense still shows ₹830 (not ₹820)
+  → User can see "Rate was ₹83 on Nov 29"
+```
 
 ---
 
